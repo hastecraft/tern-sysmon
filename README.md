@@ -110,7 +110,8 @@ Measured at the default 2 s interval:
   stay 80×24 and `resize` does not fire), so the layout is done in CSS.
 - History lives in memory: it starts over when the plugin reloads.
 - Processes the OS hides from your user are listed without some figures: on
-  macOS, other users' processes have no CPU or I/O; on Linux, per-process I/O
+  macOS, other users' processes have no CPU, I/O or thread count (so the
+  header's thread total covers your own processes); on Linux, per-process I/O
   is readable only for your own processes.
 - Process I/O on Windows and Linux counts every read and write (files,
   pipes, sockets), not only disk; macOS reports disk I/O.
