@@ -14,6 +14,13 @@
 		font-variant-numeric: tabular-nums;
 	}
 
+	/* The pane scrolls with an overlay scrollbar that paints over whatever is
+	   under it: keep the right edge clear of it. */
+	[data-role='sysmon.main'] {
+		padding-right: 14px;
+		box-sizing: border-box;
+	}
+
 	/* The dashboard: CPU and processes take a full row; memory, network and
 	   volumes share a row three, two or one at a time as the pane narrows. */
 	.sm-grid {
@@ -61,8 +68,9 @@
 	}
 
 	/* Block graphs: rows touch so the columns read as solid bars, and each row
-	   is anchored right, so a narrow pane clips the oldest samples. Each row is
-	   one tone, the same token the matching text uses. */
+	   is anchored right, so a narrow pane clips the oldest samples. Each run of
+	   columns is a span in the tone its values earned, the same tokens the
+	   matching meters and text use. */
 	.sm-graph {
 		display: flex;
 		flex-direction: column;
@@ -75,9 +83,9 @@
 		white-space: pre;
 		line-height: 1;
 	}
-	.sm-gl.ok { color: var(--sf-c-success); }
-	.sm-gl.warn { color: var(--sf-c-warning); }
-	.sm-gl.bad { color: var(--sf-c-error); }
-	.sm-gl.info { color: var(--sf-c-info); }
-	.sm-gl.acc { color: var(--sf-c-accent); }
+	.sm-gl > .ok { color: var(--sf-c-success); }
+	.sm-gl > .warn { color: var(--sf-c-warning); }
+	.sm-gl > .bad { color: var(--sf-c-error); }
+	.sm-gl > .info { color: var(--sf-c-info); }
+	.sm-gl > .acc { color: var(--sf-c-accent); }
 }

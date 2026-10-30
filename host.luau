@@ -53,7 +53,6 @@ type Snapshot = {
 	seq: number,
 	at: number,
 	interval: number,
-	host: string,
 	os: string,
 	cpuName: string,
 	up: number,
@@ -489,16 +488,25 @@ end
 -- ---- view pieces ----------------------------------------------------------------
 
 -- A block graph of `values` (fractions 0–1, newest last): GRAPH_W columns by
--- `height` rows, newest at the right, each row in its own color class.
-local function graph(key: string, values: { number }, height: number, tones: { string }): Node
+-- `height` rows, newest at the right. Each column takes the tone `tone_of`
+-- gives its value, as a meter colors its bar; runs of one tone share a span.
+local function graph(key: string, values: { number }, height: number, tone_of: (number) -> string): Node
 	local rows: { Node } = table.create(height)
 	local n = #values
 	for r = 1, height do
 		local base = (height - r) * 8
-		local cells: { string } = table.create(GRAPH_W)
+		local runs: { Node } = {}
+		local run: { string } = {}
+		local runTone = ""
+		local function flush()
+			if #run > 0 then
+				runs[#runs + 1] = ui.el("span", { class = runTone, key = #runs + 1, text = table.concat(run) })
+				run = {}
+			end
+		end
 		for c = 1, GRAPH_W do
 			local v = values[n - GRAPH_W + c]
-			local ch = NBSP
+			local ch, tone = NBSP, ""
 			if v then
 				local fill = math.floor(math.clamp(v, 0, 1) * height * 8 + 0.5) - base
 				if fill >= 8 then
@@ -508,30 +516,33 @@ local function graph(key: string, values: { number }, height: number, tones: { s
 				elseif r == height and v > 0 then
 					ch = EIGHTHS[1] -- any activity shows
 				end
+				if ch ~= NBSP then
+					tone = tone_of(v)
+				end
 			end
-			cells[c] = ch
+			if tone ~= runTone then
+				flush()
+				runTone = tone
+			end
+			run[#run + 1] = ch
 		end
-		rows[r] = ui.el("div", { class = "sm-gl " .. tones[r], key = r, text = table.concat(cells) })
+		flush()
+		rows[r] = ui.el("div", { class = "sm-gl", key = r }, runs)
 	end
 	return ui.el("div", { class = "sm-graph", key = key }, rows)
 end
 
--- Green at the bottom, amber, then red at the top, as btop draws it.
-local function gradient(height: number): { string }
-	local tones: { string } = table.create(height)
-	for r = 1, height do
-		local frac = (height - r + 1) / height
-		tones[r] = if frac > 0.8 then "bad" elseif frac > 0.55 then "warn" else "ok"
+-- Green, amber past `warn`, red past `bad`: the thresholds the matching meters use.
+local function levels(warn: number, bad: number): (number) -> string
+	return function(v: number): string
+		return if v >= bad then "bad" elseif v >= warn then "warn" else "ok"
 	end
-	return tones
 end
 
-local function flat(height: number, tone: string): { string }
-	local tokens: { string } = table.create(height)
-	for r = 1, height do
-		tokens[r] = tone
+local function flat(tone: string): (number) -> string
+	return function(_v: number): string
+		return tone
 	end
-	return tokens
 end
 
 -- The last GRAPH_W values scaled to their own peak; the peak too.
@@ -557,8 +568,7 @@ end
 
 local function header(s: Snapshot): Node
 	local left: { any } = {
-		ui.span(s.host, "strong"),
-		ui.span("  " .. s.os, "muted"),
+		ui.span(s.os, "strong"),
 		ui.span("   up ", "muted"),
 		ui.span(duration(s.up), "num"),
 	}
@@ -577,7 +587,11 @@ local function header(s: Snapshot): Node
 	local right = if stale
 		then ui.text({ ui.span("no new sample for " .. (tern.now() - changedAt) // 1000 .. "s", "warning") })
 		else ui.text({ ui.span("sampled ", "muted"), ui.span(os.date("%H:%M:%S", s.at // 1000) :: string, "num") })
-	return with(ui.row({ with(ui.text(left), { grow = 1, wrap = "none" }), right }), { justify = "between", key = "header" })
+	-- The facts wrap onto a second line in a narrow pane; the sample time never splits.
+	return with(ui.row({ with(ui.text(left), { grow = 1 }), with(right, { wrap = "none" }) }), {
+		justify = "between",
+		key = "header",
+	})
 end
 
 local function core_cell(i: number, use: number): Node
@@ -605,7 +619,7 @@ local function cpu_card(s: Snapshot): Node
 	local kcols = if #s.cpu.cores > 16 then 4 else 2
 	local height = math.clamp(math.ceil(#s.cpu.cores / kcols), 4, 10)
 	local body = ui.el("div", { class = "sm-cpu" }, {
-		graph("hist", hist.cpu, height, gradient(height)),
+		graph("hist", hist.cpu, height, levels(0.6, 0.85)),
 		ui.el("div", { class = "sm-cores k" .. kcols, key = "cores" }, cores),
 	})
 	return with(ui.card(head, { body }), { key = "cpu", role = "sysmon.wide" })
@@ -659,7 +673,7 @@ local function mem_card(s: Snapshot): Node
 			total = "of " .. human(m.total),
 		}),
 		ui.kv(items),
-		graph("hist", hist.mem, 3, gradient(3)),
+		graph("hist", hist.mem, 3, levels(0.8, 0.92)),
 	}), { key = "mem", role = "sysmon.card" })
 end
 
@@ -717,12 +731,12 @@ local function net_card(s: Snapshot): Node
 			ui.text({ ui.span("↓ ", "info"), ui.span(rate(rx), "num strong") }),
 			ui.text({ ui.span("peak " .. rate(downPeak), "muted") }),
 		}), { justify = "between" }),
-		graph("down", down, 3, flat(3, "info")),
+		graph("down", down, 3, flat("info")),
 		with(ui.row({
 			ui.text({ ui.span("↑ ", "accent"), ui.span(rate(tx), "num strong") }),
 			ui.text({ ui.span("peak " .. rate(upPeak), "muted") }),
 		}), { justify = "between" }),
-		graph("up", up, 3, flat(3, "acc")),
+		graph("up", up, 3, flat("acc")),
 	}
 	if #active > 1 then
 		local rows: { { Cell } } = {}
@@ -870,9 +884,9 @@ local monitor: BlockDef<Block> = {
 		return b
 	end,
 
+	-- No host name, here or anywhere: screenshots of the monitor stay anonymous.
 	title = function(_b)
-		local s = snap
-		return if s then "System Monitor · " .. s.host else "System Monitor"
+		return "System Monitor"
 	end,
 
 	view = function(b, cx)
@@ -882,7 +896,7 @@ local monitor: BlockDef<Block> = {
 				then problem_card()
 				elseif status == "building" then waiting("Compiling the collector (first run only)…")
 				else waiting("Starting the collector…")
-			return { main = ui.col({ main }), dock = dock() }
+			return { main = with(ui.col({ main }), { role = "sysmon.main" }), dock = dock() }
 		end
 		local cards: { Node } = {
 			cpu_card(s),
@@ -896,7 +910,7 @@ local monitor: BlockDef<Block> = {
 			table.insert(main, problem_card())
 		end
 		table.insert(main, ui.el("div", { class = "sm-grid", key = "grid" }, cards))
-		return { main = ui.col(main), dock = dock() }
+		return { main = with(ui.col(main), { role = "sysmon.main" }), dock = dock() }
 	end,
 
 	key = function(b, key, cx)

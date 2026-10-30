@@ -23,9 +23,11 @@ def fail(msg):
 
 
 def check_snapshot(s):
-    for key in ("v", "seq", "at", "interval", "host", "os", "cpuName", "up", "cpu", "mem", "io", "disk", "net", "proc"):
+    for key in ("v", "seq", "at", "interval", "os", "cpuName", "up", "cpu", "mem", "io", "disk", "net", "proc"):
         if key not in s:
             fail("snapshot lacks %r" % key)
+    if "host" in s:
+        fail("snapshot carries the host name; it must stay anonymous")
     if s["v"] != 1:
         fail("unknown version %r" % s["v"])
     cores = s["cpu"]["cores"]
@@ -111,7 +113,7 @@ def main():
     one_core = 100.0 / cores
     procs = last["proc"]
     spin = next((p for p in procs if p[0] == spinner_pid), None)
-    print("host=%r os=%r cpu=%r" % (last["host"], last["os"], last["cpuName"]))
+    print("os=%r cpu=%r" % (last["os"], last["cpuName"]))
     print("cores=%d total=%.2f%% mem avail/total=%d/%d procs=%d snapshots=%d" % (
         cores, last["cpu"]["total"], last["mem"]["avail"], last["mem"]["total"], len(procs), len(seqs)))
     print("mem=%r" % last["mem"])

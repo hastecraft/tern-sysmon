@@ -279,7 +279,7 @@ static void prev_reset(PrevTable *t, size_t count) {
 	memset(t->slots, 0, cap * sizeof(Prev));
 }
 
-static char host[256], os_name[256], cpu_name[256];
+static char os_name[256], cpu_name[256];
 static int ncores;
 static double up_s;
 
@@ -384,7 +384,6 @@ static void describe(void) {
 	page_size = sysconf(_SC_PAGESIZE);
 	if (clk_tck <= 0) clk_tck = 100;
 	if (page_size <= 0) page_size = 4096;
-	if (gethostname(host, sizeof host - 1) != 0) strcpy(host, "linux");
 
 	struct utsname u;
 	char kernel[128] = "";
@@ -733,9 +732,6 @@ static void describe(void) {
 	host_port = mach_host_self();
 	mach_timebase_info_data_t tb;
 	if (mach_timebase_info(&tb) == 0 && tb.denom) ns_per_tick = (double)tb.numer / tb.denom;
-	if (gethostname(host, sizeof host - 1) != 0) strcpy(host, "mac");
-	char *dot = strstr(host, ".local");
-	if (dot && dot[6] == 0) *dot = 0;
 	char ver[64], build[64];
 	sysctl_str("kern.osproductversion", ver, sizeof ver);
 	sysctl_str("kern.osversion", build, sizeof build);
@@ -1007,8 +1003,6 @@ static void write_snapshot(const char *path, int interval) {
 	js_u64((uint64_t)wall_ms());
 	js_put(",\"interval\":");
 	js_u64((uint64_t)interval);
-	js_put(",\"host\":");
-	js_str(host);
 	js_put(",\"os\":");
 	js_str(os_name);
 	js_put(",\"cpuName\":");

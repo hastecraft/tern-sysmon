@@ -126,7 +126,6 @@ namespace TernSysmon
         static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
         static readonly Stopwatch Clock = Stopwatch.StartNew();
 
-        static string host;
         static string os;
         static string cpuName;
         static int cores;
@@ -230,7 +229,6 @@ namespace TernSysmon
 
         static void Describe()
         {
-            host = Environment.MachineName;
             cores = Environment.ProcessorCount;
             os = "Windows";
             cpuName = "";
@@ -532,7 +530,6 @@ namespace TernSysmon
             sb.Append("{\"v\":1,\"seq\":").Append(seq.ToString(Inv));
             sb.Append(",\"at\":").Append(((long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds).ToString(Inv));
             sb.Append(",\"interval\":").Append(interval.ToString(Inv));
-            sb.Append(",\"host\":"); Str(sb, host);
             sb.Append(",\"os\":"); Str(sb, os);
             sb.Append(",\"cpuName\":"); Str(sb, cpuName);
             sb.Append(",\"up\":").Append((Native.GetTickCount64() / 1000).ToString(Inv));

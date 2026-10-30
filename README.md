@@ -49,7 +49,7 @@ the plugin there too (`tern plugin install …` in a pane on that host).
 
 | Card | Shows |
 | --- | --- |
-| Header | host, OS and version, uptime, processes, threads, handles (Windows) or open files, last sample time |
+| Header | OS and version, uptime, processes, threads, handles (Windows) or open files, last sample time. No host name, so screenshots stay anonymous |
 | CPU | total, per-core meters, a fixed-scale 0–100 % history graph |
 | Memory | in use, available, cache; committed and kernel pools (Windows), swap and kernel (Linux), swap and wired (macOS); a history graph |
 | Network | total down/up with auto-scaled graphs and their peaks, the busy interfaces |
