@@ -16,7 +16,7 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build (gcc, warnings are errors)
         run: cc -O2 -Wall -Wextra -Werror -o sysmon-collector collector.c
       - name: Build (clang, C99)
@@ -28,10 +28,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, macos-13] # Apple silicon, Intel
+        os: [macos-latest, macos-15-intel] # Apple silicon, Intel
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build
         run: cc -O2 -Wall -Wextra -Werror -o sysmon-collector collector.c -framework IOKit -framework CoreFoundation
       - name: Validate
@@ -40,7 +40,7 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build (in-box .NET Framework compiler)
         shell: pwsh
         run: |
