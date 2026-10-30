@@ -10,8 +10,6 @@ its CPU, memory, I/O and threads. Windows, macOS and Linux.
 
 ![System Monitor in Tern](docs/screenshot.png)
 
-<sub>Screenshot with sample data.</sub>
-
 ## Install
 
 ```sh
