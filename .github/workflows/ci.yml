@@ -1,0 +1,50 @@
+name: collector
+
+# Builds each collector exactly as the plugin does on first run, then runs it
+# through ci/validate.py: the file protocol, every snapshot field, and a child
+# process spinning one core that must show up at one core's share.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (gcc, warnings are errors)
+        run: cc -O2 -Wall -Wextra -Werror -o sysmon-collector collector.c
+      - name: Build (clang, C99)
+        run: clang -O2 -std=c99 -Wall -Wextra -Werror -o /tmp/sysmon-collector-clang collector.c
+      - name: Validate
+        run: python3 ci/validate.py ./sysmon-collector 8
+
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, macos-13] # Apple silicon, Intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cc -O2 -Wall -Wextra -Werror -o sysmon-collector collector.c -framework IOKit -framework CoreFoundation
+      - name: Validate
+        run: python3 ci/validate.py ./sysmon-collector 8
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build (in-box .NET Framework compiler)
+        shell: pwsh
+        run: |
+          & "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\csc.exe" /nologo /optimize+ /warnaserror+ /target:winexe /platform:x64 /out:sysmon-collector.exe collector.cs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Validate
+        run: python ci/validate.py sysmon-collector.exe 8

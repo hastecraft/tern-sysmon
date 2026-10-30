@@ -1,0 +1,83 @@
+/* System Monitor: the dashboard layout, the per-core meters and the block graphs.
+   Blocks are not told their pane size, so everything that adapts to the pane
+   adapts here, in CSS. Every rule is scoped to the block's regions.
+
+   Colors come only from Tern's surface tokens (--sf-c-*), the variables its
+   own spans and badges use: they follow the active theme (its --omp-* palette)
+   and fall back to Tern's light and dark defaults. */
+[data-surface='plugin.sysmon.monitor'] {
+	/* Numbers that change every second should not shift sideways. */
+	.sf-table,
+	.sf-kv-v,
+	.sf-meter,
+	.sf-t-num {
+		font-variant-numeric: tabular-nums;
+	}
+
+	/* The dashboard: CPU and processes take a full row; memory, network and
+	   volumes share a row three, two or one at a time as the pane narrows. */
+	.sm-grid {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 10px;
+		width: 100%;
+		align-items: stretch;
+	}
+	.sm-grid > [data-role='sysmon.card'] {
+		flex: 1 1 30em;
+		min-width: 0;
+	}
+	.sm-grid > [data-role='sysmon.wide'] {
+		flex: 1 1 100%;
+		min-width: 0;
+	}
+
+	/* CPU: the history graph beside the per-core meters, or above them. */
+	.sm-cpu {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px 18px;
+		align-items: flex-start;
+	}
+	.sm-cpu > .sm-graph { flex: 1 1 24em; }
+	.sm-cpu > .sm-cores { flex: 1 1 30em; }
+
+	.sm-cores {
+		display: grid;
+		gap: 0 16px;
+	}
+	.sm-cores.k2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+	.sm-cores.k4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+	.sm-core {
+		display: grid;
+		grid-template-columns: 2.6em minmax(0, 1fr);
+		align-items: center;
+		column-gap: 6px;
+	}
+	.sm-core .sf-mt-lbl {
+		min-width: 3.2em;
+		text-align: right;
+	}
+
+	/* Block graphs: rows touch so the columns read as solid bars, and each row
+	   is anchored right, so a narrow pane clips the oldest samples. Each row is
+	   one tone, the same token the matching text uses. */
+	.sm-graph {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		overflow: hidden;
+		min-width: 0;
+	}
+	.sm-gl {
+		flex: none;
+		white-space: pre;
+		line-height: 1;
+	}
+	.sm-gl.ok { color: var(--sf-c-success); }
+	.sm-gl.warn { color: var(--sf-c-warning); }
+	.sm-gl.bad { color: var(--sf-c-error); }
+	.sm-gl.info { color: var(--sf-c-info); }
+	.sm-gl.acc { color: var(--sf-c-accent); }
+}
