@@ -99,7 +99,11 @@ def main():
             err = os.path.join(data, "collector.err")
             fail("collector exited early (%d): %s" % (proc.returncode, open(err).read() if os.path.exists(err) else ""))
         if os.path.exists(snap_path):
-            s = json.loads(open(snap_path, encoding="utf-8").read())
+            try:
+                with open(snap_path, encoding="utf-8") as f:
+                    s = json.loads(f.read())
+            except PermissionError:
+                continue  # Windows: caught mid-replace; the plugin retries the same way
             if not seqs or s["seq"] != seqs[-1]:
                 seqs.append(s["seq"])
                 last = s
