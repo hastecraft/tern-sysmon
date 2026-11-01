@@ -18,9 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Build (gcc, warnings are errors)
-        run: cc -O2 -Wall -Wextra -Werror -o sysmon-collector collector.c
+        run: cc -O2 -Wall -Wextra -Werror -o sysmon-collector collector.c -ldl
       - name: Build (clang, C99)
-        run: clang -O2 -std=c99 -Wall -Wextra -Werror -o /tmp/sysmon-collector-clang collector.c
+        run: clang -O2 -std=c99 -Wall -Wextra -Werror -o /tmp/sysmon-collector-clang collector.c -ldl
       - name: Validate
         run: python3 ci/validate.py ./sysmon-collector 8
 

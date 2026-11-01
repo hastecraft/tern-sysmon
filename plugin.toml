@@ -1,12 +1,11 @@
 schema = 1
 id = "sysmon"
 name = "System Monitor"
-version = "0.2.1"
+version = "0.3.0"
 description = "A live system monitor as a native Tern block: per-core CPU, memory, network, volumes and every process, from a tiny native collector."
 icon = "gauge"
 host = "host.luau"
 window = "window.luau"
-styles = ["sysmon.css"]
 
 [[blocks]]
 id = "monitor"

@@ -4,19 +4,22 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A btop-style system monitor for [Tern](https://stencil.so/tern), drawn as a
-**native Tern block** rather than a terminal program: per-core CPU with a
-history graph, memory, network, volumes and disk I/O, and every process with
-its CPU, memory, I/O and threads. Windows, macOS and Linux.
+**native Tern block** rather than a terminal program. One page shows it all:
+CPU per thread, GPUs, memory, network, disk I/O, volumes and every process,
+with history charts. Windows, macOS and Linux.
 
 ![System Monitor in Tern](docs/screenshot.png)
 
 ## Install
 
+Needs **Tern 0.9.9 or newer** (it draws with the charts, tables, stats and
+settings sheet that release added).
+
 ```sh
 tern plugin install github.com/hastecraft/tern-sysmon
 ```
 
-Then open one from the palette with **New System Monitor block**, or press
+Open one from the palette with **New System Monitor block**, or press
 <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> (<kbd>⌥</kbd><kbd>⇧</kbd><kbd>M</kbd>
 on macOS) to open one beside the focused pane, or focus the one already open.
 
@@ -38,28 +41,49 @@ the plugin there too (`tern plugin install …` in a pane on that host).
 
 ## Use
 
+| Panel | Shows |
+| --- | --- |
+| Head | OS and version, uptime, threads, handles (Windows) or open files, sample time, collector status. No host name, so screenshots stay anonymous |
+| Headline numbers | CPU, memory, network and disk at a glance; amber or red when they need attention |
+| CPU | a 0–100 % history line with a busy mark, and a bar per thread |
+| GPU | each GPU's busy share over time and its dedicated memory |
+| Memory | in use and available, cache, committed and kernel pools (Windows), swap and kernel (Linux), swap and wired (macOS), a history area |
+| Network | down and up over time, the busiest interfaces |
+| Disk I/O | read and write over time |
+| Volumes | free space and fill per local volume |
+| Processes | sortable by any column, a CPU trend per process, a status dot (idle, running, a full core, half the machine); select one for its details and **End process** |
+
+Click a column head to sort by it, or use the CPU / Memory / I/O switch.
+Right-click a process for **End process…** and **Copy PID**. Ending a process
+always asks first.
+
 | Key | Action |
 | --- | --- |
-| <kbd>S</kbd> / <kbd>Tab</kbd> | order processes by CPU → memory → I/O (or click the tabs) |
-| <kbd>-</kbd> / <kbd>+</kbd> | sample faster / slower, 1 s to 10 s (remembered) |
-| <kbd>R</kbd> | restart the collector now (also skips a retry wait) |
+| <kbd>↑</kbd> <kbd>↓</kbd> (<kbd>J</kbd> <kbd>K</kbd>) | select a process |
+| <kbd>X</kbd> / <kbd>Delete</kbd> | end the selected process (asks; <kbd>Enter</kbd> confirms, <kbd>Esc</kbd> cancels) |
+| <kbd>S</kbd> | sort by CPU → memory → I/O |
+| <kbd>-</kbd> / <kbd>+</kbd> | sample faster / slower: 1, 2, 5 or 10 s |
+| <kbd>,</kbd> | settings |
+| <kbd>R</kbd> | restart the collector (also skips a retry wait) |
 | <kbd>Q</kbd> | close the block |
 
-| Card | Shows |
-| --- | --- |
-| Header | OS and version, uptime, processes, threads, handles (Windows) or open files, last sample time. No host name, so screenshots stay anonymous |
-| CPU | total, per-core meters, a fixed-scale 0–100 % history graph |
-| Memory | in use, available, cache; committed and kernel pools (Windows), swap and kernel (Linux), swap and wired (macOS); a history graph |
-| Network | total down/up with auto-scaled graphs and their peaks, the busy interfaces |
-| Volumes | used, free and fill per local volume; total disk read/write |
-| Processes | top 25 by CPU, memory or I/O: PID, CPU as % of the whole machine, resident memory, I/O rate, threads |
+### Settings
 
-The layout follows the pane: CPU and processes take full rows; memory,
-network and volumes sit three, two or one to a row as the pane narrows.
-Graphs keep the newest sample at the right edge.
+<kbd>,</kbd> or the sliders button opens a settings sheet. Changes apply at
+once to every open monitor and are kept:
 
-**Themes.** Every color comes from Tern's own surface tokens, so the monitor
-follows whatever theme is active, light or dark, without configuration.
+- **Sample every** 1, 2, 5 or 10 s.
+- **History**: 60, 120 or 300 samples per chart.
+- **Process rows**: 10, 20, 50 or all.
+- **Panels**: show or hide the headline numbers, CPU, per-thread bars, GPU,
+  memory, network, disk I/O, volumes and processes.
+
+The layout follows the pane: CPU and GPU share the top row, the other panels
+sit four, three, two or one to a row as the pane narrows, and processes take
+the full width.
+
+**Themes.** The view is built only from Tern's own elements and tones, with no
+stylesheet, so it follows whatever theme is active, light or dark.
 
 ## How it works
 
@@ -76,10 +100,13 @@ flowchart LR
   directly:
   - **Windows:** `NtQuerySystemInformation` (per-core times and every
     process, services included, without elevation), `GlobalMemoryStatusEx`,
-    `GetPerformanceInfo`. No performance counters, so it works on machines
-    whose counter registry is broken.
-  - **Linux:** `/proc` and `/sys`.
-  - **macOS:** Mach host statistics, `libproc`, IOKit and `sysctl`.
+    `GetPerformanceInfo`, and the D3DKMT statistics Task Manager's GPU page
+    reads (any vendor). No performance counters, so it works on machines whose
+    counter registry is broken.
+  - **Linux:** `/proc` and `/sys`; NVIDIA GPUs through NVML when the driver
+    installed it, AMD GPUs through `amdgpu`'s sysfs files.
+  - **macOS:** Mach host statistics, `libproc`, IOKit (disks and GPU
+    statistics) and `sysctl`.
 - `host.luau` polls the snapshot, keeps the history and draws every open
   block. It writes a `heartbeat` while blocks are open; the collector exits
   when the heartbeat goes stale or when `owner` names a newer collector (a
@@ -91,7 +118,7 @@ flowchart LR
 
 It makes no network requests. Everything it writes stays in the plugin's data
 folder (`tern.plugin.data`): the built collector, `snapshot.json`,
-`heartbeat`, `owner`, `collector.err` and `kv.json` (the interval).
+`heartbeat`, `owner`, `collector.err` and `kv.json` (the interval and settings).
 
 ### Cost
 
@@ -99,14 +126,14 @@ Measured at the default 2 s interval:
 
 | | CPU per sample | Resident memory |
 | --- | --- | --- |
-| Windows 11, ~320 processes | ~7 ms (0.36 % of one core) | ~20 MB |
+| Windows 11, ~320 processes | ~7 ms (0.36 % of one core) | ~24 MB |
 | Linux (Ubuntu 22.04), ~30 processes | ~0.6 ms (0.03 % of one core) | ~2 MB |
 
 ## Limitations
 
-- Tern does not yet tell plugin blocks their pane size (`cx.cols`/`cx.rows`
-  stay 80×24 and `resize` does not fire), so the layout is done in CSS.
 - History lives in memory: it starts over when the plugin reloads.
+- GPU utilization needs a driver that reports it: Intel GPUs on Linux show
+  none, and Apple silicon shares system memory, so it shows no separate VRAM.
 - Processes the OS hides from your user are listed without some figures: on
   macOS, other users' processes have no CPU, I/O or thread count (so the
   header's thread total covers your own processes); on Linux, per-process I/O
@@ -123,7 +150,7 @@ tern plugin types tern-sysmon     # writes tern.d.luau for luau-lsp
 luau-lsp analyze --definitions:@tern=tern-sysmon/tern.d.luau tern-sysmon/host.luau tern-sysmon/window.luau
 ```
 
-| Windows 11, ~320 processes | ~7 ms (0.36 % of one core) | ~24 MB |
+A linked plugin reloads about 300 ms after any file in the folder changes, so
 keep build output and screenshots elsewhere, and note that a save with a
 syntax error ends every open monitor block until it is fixed.
 
@@ -133,7 +160,7 @@ at one core's share of the machine). CI runs it on Linux, macOS (Apple
 silicon and Intel) and Windows:
 
 ```sh
-cc -O2 -o /tmp/sysmon-collector collector.c                      # Linux
+cc -O2 -o /tmp/sysmon-collector collector.c -ldl                                          # Linux
 cc -O2 -o /tmp/sysmon-collector collector.c -framework IOKit -framework CoreFoundation  # macOS
 python3 ci/validate.py /tmp/sysmon-collector
 ```
@@ -141,11 +168,10 @@ python3 ci/validate.py /tmp/sysmon-collector
 | File | Role |
 | --- | --- |
 | `plugin.toml` | the manifest: id `sysmon`, block `monitor` |
-| `host.luau` | the block: collector lifecycle, polling, history, the view |
+| `host.luau` | the block: collector lifecycle, polling, history, settings, the view |
 | `window.luau` | the palette command and the key bind |
 | `collector.cs` | the Windows sampler (C# 5, in-box compiler) |
 | `collector.c` | the Linux and macOS sampler (C99) |
-| `sysmon.css` | the responsive layout, core meters and graph colors |
 | `ci/validate.py` | the collector test CI runs |
 
 ## License

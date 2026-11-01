@@ -69,6 +69,13 @@ def check_snapshot(s):
     for n in s["net"]:
         if n["rx"] < 0 or n["tx"] < 0:
             fail("bad interface rate: %r" % n)
+    # GPUs are optional (CI runners have none) but must be well formed when present:
+    # util is a percentage, or -1 when the driver doesn't report one.
+    for g in s.get("gpu", []):
+        if not isinstance(g.get("name"), str) or not (g["util"] == -1 or 0 <= g["util"] <= 100):
+            fail("bad GPU: %r" % g)
+        if g["memUsed"] < 0 or g["memTotal"] < 0 or (g["memTotal"] > 0 and g["memUsed"] > g["memTotal"]):
+            fail("bad GPU memory: %r" % g)
 
 
 def main():
@@ -124,6 +131,7 @@ def main():
     print("counts=%r io=%r" % (last.get("counts"), last["io"]))
     print("disk=%r" % last["disk"])
     print("net=%r" % last["net"])
+    print("gpu=%r" % last.get("gpu"))
     print("busiest=%r" % sorted(procs, key=lambda p: -p[2])[:5])
     print("processes with CPU readings: %d of %d" % (sum(1 for p in procs if p[2] > 0), len(procs)))
     if spin is None:

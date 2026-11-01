@@ -80,6 +80,20 @@ namespace TernSysmon
 
         [DllImport("kernel32.dll")]
         public static extern ulong GetTickCount64();
+
+        // The kernel graphics interface Task Manager's GPU page reads (D3DKMT): every
+        // adapter's engines and memory segments, for any vendor, without counters.
+        [DllImport("gdi32.dll")]
+        public static extern int D3DKMTEnumAdapters2(IntPtr enumAdapters);
+
+        [DllImport("gdi32.dll")]
+        public static extern int D3DKMTQueryAdapterInfo(IntPtr query);
+
+        [DllImport("gdi32.dll")]
+        public static extern int D3DKMTQueryStatistics(IntPtr query);
+
+        [DllImport("gdi32.dll")]
+        public static extern int D3DKMTCloseAdapter(IntPtr close);
     }
 
     sealed class ProcPrev
@@ -118,6 +132,17 @@ namespace TernSysmon
         public double Tx;
     }
 
+    sealed class Gpu
+    {
+        public string Name;
+        public long Luid;
+        public int Segments;
+        public long[] PrevRun;
+        public double Util;
+        public long MemUsed;
+        public long MemTotal;
+    }
+
     static class Collector
     {
         const int CoreStride = 48; // SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION
@@ -152,6 +177,8 @@ namespace TernSysmon
         static double cpuTotal;
         static List<Proc> procs = new List<Proc>();
         static List<NetRate> net = new List<NetRate>();
+        static List<Gpu> gpus = new List<Gpu>();
+        static IntPtr statBuf = IntPtr.Zero;
         static double ioRead;
         static double ioWrite;
         static long seq;
@@ -259,6 +286,114 @@ namespace TernSysmon
                 }
             }
             catch (Exception) { }
+            try { DescribeGpus(); } catch (Exception) { gpus = new List<Gpu>(); }
+        }
+
+        // D3DKMT_QUERYSTATISTICS (x64): Type at 0, AdapterLuid at 4, the result
+        // union at 24, the segment or node id at 0x320; 0x328 bytes in all.
+        const int StatSize = 0x328, StatResult = 24, StatQueryId = 0x320;
+        const int StatAdapter = 0, StatSegment = 3, StatNode = 5;
+
+        static bool Stat(int type, long luid, int id)
+        {
+            for (int i = 0; i < StatSize; i += 8) Marshal.WriteInt64(statBuf, i, 0);
+            Marshal.WriteInt32(statBuf, 0, type);
+            Marshal.WriteInt64(statBuf, 4, luid);
+            Marshal.WriteInt32(statBuf, StatQueryId, id);
+            return Native.D3DKMTQueryStatistics(statBuf) == 0;
+        }
+
+        // The real GPUs: adapters with engines and dedicated memory, once per LUID
+        // (each display output can list its adapter again; software renderers have neither).
+        static void DescribeGpus()
+        {
+            statBuf = Marshal.AllocHGlobal(StatSize);
+            IntPtr e = Marshal.AllocHGlobal(16);
+            IntPtr infos = IntPtr.Zero;
+            IntPtr reg = Marshal.AllocHGlobal(4 * 260 * 2);
+            IntPtr q = Marshal.AllocHGlobal(24);
+            try
+            {
+                Marshal.WriteInt32(e, 0, 0);
+                Marshal.WriteInt64(e, 8, 0);
+                if (Native.D3DKMTEnumAdapters2(e) != 0) return;
+                int n = Marshal.ReadInt32(e, 0);
+                if (n <= 0) return;
+                infos = Marshal.AllocHGlobal(20 * n); // D3DKMT_ADAPTERINFO: handle, LUID, sources, flag
+                Marshal.WriteInt64(e, 8, infos.ToInt64());
+                if (Native.D3DKMTEnumAdapters2(e) != 0) return;
+                n = Marshal.ReadInt32(e, 0);
+                var seen = new HashSet<long>();
+                for (int a = 0; a < n; a++)
+                {
+                    IntPtr info = IntPtr.Add(infos, a * 20);
+                    int handle = Marshal.ReadInt32(info, 0);
+                    long luid = Marshal.ReadInt64(info, 4);
+                    string name = null;
+                    // D3DKMT_QUERYADAPTERINFO: KMTQAITYPE_ADAPTERREGISTRYINFO (8) gives the adapter's name.
+                    Marshal.WriteInt32(q, 0, handle);
+                    Marshal.WriteInt32(q, 4, 8);
+                    Marshal.WriteInt64(q, 8, reg.ToInt64());
+                    Marshal.WriteInt32(q, 16, 4 * 260 * 2);
+                    if (Native.D3DKMTQueryAdapterInfo(q) == 0) name = Marshal.PtrToStringUni(reg);
+                    Marshal.WriteInt32(q, 0, handle);
+                    Native.D3DKMTCloseAdapter(q);
+                    if (string.IsNullOrEmpty(name) || !seen.Add(luid) || !Stat(StatAdapter, luid, 0)) continue;
+                    int segments = Marshal.ReadInt32(statBuf, StatResult);
+                    int nodes = Marshal.ReadInt32(statBuf, StatResult + 4);
+                    var g = new Gpu();
+                    g.Name = name.Trim();
+                    g.Luid = luid;
+                    g.Segments = segments;
+                    g.PrevRun = new long[Math.Max(0, nodes)];
+                    for (int k = 0; k < g.PrevRun.Length; k++) g.PrevRun[k] = -1;
+                    SampleGpuMemory(g);
+                    if (nodes > 0 && g.MemTotal > 0) gpus.Add(g);
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(e);
+                Marshal.FreeHGlobal(reg);
+                Marshal.FreeHGlobal(q);
+                if (infos != IntPtr.Zero) Marshal.FreeHGlobal(infos);
+            }
+        }
+
+        // Dedicated memory: the segments not in the system aperture.
+        // D3DKMT_QUERYSTATISTICS_SEGMENT_INFORMATION: CommitLimit, BytesCommitted, BytesResident, …, Aperture at 40.
+        static void SampleGpuMemory(Gpu g)
+        {
+            long total = 0, used = 0;
+            for (int s = 0; s < g.Segments; s++)
+            {
+                if (!Stat(StatSegment, g.Luid, s) || Marshal.ReadInt32(statBuf, StatResult + 40) != 0) continue;
+                total += Math.Max(0, Marshal.ReadInt64(statBuf, StatResult));
+                used += Math.Max(0, Marshal.ReadInt64(statBuf, StatResult + 16));
+            }
+            g.MemTotal = total;
+            g.MemUsed = Math.Min(used, total);
+        }
+
+        // Busy as Task Manager shows it: the busiest engine's share of the interval.
+        static void SampleGpus(double dt)
+        {
+            foreach (Gpu g in gpus)
+            {
+                double busiest = 0;
+                for (int k = 0; k < g.PrevRun.Length; k++)
+                {
+                    if (!Stat(StatNode, g.Luid, k)) continue;
+                    long run = Marshal.ReadInt64(statBuf, StatResult); // running time, 100 ns
+                    if (g.PrevRun[k] >= 0 && dt > 0 && run >= g.PrevRun[k])
+                    {
+                        busiest = Math.Max(busiest, (run - g.PrevRun[k]) / (dt * 1e7) * 100);
+                    }
+                    g.PrevRun[k] = run;
+                }
+                g.Util = Math.Min(100, busiest);
+                SampleGpuMemory(g);
+            }
         }
 
         // ---- sampling ---------------------------------------------------------
@@ -275,6 +410,7 @@ namespace TernSysmon
                 volumesAt = now;
             }
             SampleNet(dt, now);
+            SampleGpus(dt);
             prevAt = now;
             seq++;
         }
@@ -584,6 +720,19 @@ namespace TernSysmon
                 sb.Append("{\"name\":"); Str(sb, r.Name);
                 sb.Append(",\"rx\":"); Num(sb, r.Rx);
                 sb.Append(",\"tx\":"); Num(sb, r.Tx); sb.Append('}');
+            }
+            sb.Append(']');
+
+            // [{name, util %, dedicated memory used, total}]
+            sb.Append(",\"gpu\":[");
+            for (int i = 0; i < gpus.Count; i++)
+            {
+                Gpu g = gpus[i];
+                if (i > 0) sb.Append(',');
+                sb.Append("{\"name\":"); Str(sb, g.Name);
+                sb.Append(",\"util\":"); Num(sb, g.Util);
+                sb.Append(",\"memUsed\":").Append(g.MemUsed.ToString(Inv));
+                sb.Append(",\"memTotal\":").Append(g.MemTotal.ToString(Inv)).Append('}');
             }
             sb.Append(']');
 

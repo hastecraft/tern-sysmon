@@ -53,6 +53,7 @@
 #include <sys/mount.h>
 #include <sys/sysctl.h>
 #elif defined(__linux__)
+#include <dlfcn.h>
 #include <mntent.h>
 #include <sys/utsname.h>
 #else
@@ -300,6 +301,17 @@ static double volumes_at = -1e9;
 
 static Nic nics[MAX_NICS];
 static size_t nnics;
+
+// GPUs: utilization in percent (-1 when the driver doesn't say) and dedicated
+// memory (0 total when it shares system memory or doesn't say).
+#define MAX_GPUS 8
+typedef struct {
+	char name[128];
+	double util;
+	uint64_t used, total;
+} Gpu;
+static Gpu gpus[MAX_GPUS];
+static size_t ngpus;
 
 static double io_read, io_write;
 static double prev_at = -1;
@@ -704,6 +716,87 @@ static void sample_net(double dt) {
 	nnic_prev = ncur;
 }
 
+// NVIDIA through NVML, the library nvidia-smi uses, loaded only where the
+// driver installed it. Signatures as in nvml.h.
+typedef struct {
+	unsigned int gpu, memory;
+} NvmlUtil;
+typedef struct {
+	unsigned long long total, free, used;
+} NvmlMem;
+static void *nvml;
+static int nvml_tried;
+static int (*nvml_count)(unsigned int *);
+static int (*nvml_handle)(unsigned int, void **);
+static int (*nvml_util)(void *, NvmlUtil *);
+static int (*nvml_mem)(void *, NvmlMem *);
+static int (*nvml_name)(void *, char *, unsigned int);
+
+static void nvml_open(void) {
+	nvml_tried = 1;
+	void *lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY | RTLD_LOCAL);
+	if (!lib) return;
+	int (*init)(void) = (int (*)(void))dlsym(lib, "nvmlInit_v2");
+	*(void **)&nvml_count = dlsym(lib, "nvmlDeviceGetCount_v2");
+	*(void **)&nvml_handle = dlsym(lib, "nvmlDeviceGetHandleByIndex_v2");
+	*(void **)&nvml_util = dlsym(lib, "nvmlDeviceGetUtilizationRates");
+	*(void **)&nvml_mem = dlsym(lib, "nvmlDeviceGetMemoryInfo");
+	*(void **)&nvml_name = dlsym(lib, "nvmlDeviceGetName");
+	if (!init || !nvml_count || !nvml_handle || !nvml_util || !nvml_mem || !nvml_name || init() != 0) {
+		dlclose(lib);
+		return;
+	}
+	nvml = lib;
+}
+
+static void sample_gpus(void) {
+	ngpus = 0;
+	if (!nvml_tried) nvml_open();
+	unsigned int count = 0;
+	if (nvml && nvml_count(&count) == 0) {
+		for (unsigned int i = 0; i < count && ngpus < MAX_GPUS; i++) {
+			void *dev;
+			if (nvml_handle(i, &dev) != 0) continue;
+			Gpu *g = &gpus[ngpus++];
+			if (nvml_name(dev, g->name, sizeof g->name) != 0) snprintf(g->name, sizeof g->name, "NVIDIA GPU %u", i);
+			NvmlUtil u;
+			g->util = nvml_util(dev, &u) == 0 ? (double)u.gpu : -1;
+			NvmlMem m;
+			if (nvml_mem(dev, &m) == 0) {
+				g->used = m.used;
+				g->total = m.total;
+			} else {
+				g->used = g->total = 0;
+			}
+		}
+	}
+	// AMD (amdgpu) reports its busy share and VRAM in sysfs.
+	DIR *d = opendir("/sys/class/drm");
+	if (!d) return;
+	struct dirent *e;
+	char path[600], text[256];
+	while ((e = readdir(d)) != NULL && ngpus < MAX_GPUS) {
+		if (strncmp(e->d_name, "card", 4) != 0 || strchr(e->d_name, '-')) continue; // connectors are card0-DP-1
+		snprintf(path, sizeof path, "/sys/class/drm/%s/device/gpu_busy_percent", e->d_name);
+		if (read_file(path, text, sizeof text) <= 0) continue;
+		Gpu *g = &gpus[ngpus++];
+		g->util = strtod(text, NULL);
+		snprintf(path, sizeof path, "/sys/class/drm/%s/device/mem_info_vram_used", e->d_name);
+		g->used = read_file(path, text, sizeof text) > 0 ? strtoull(text, NULL, 10) : 0;
+		snprintf(path, sizeof path, "/sys/class/drm/%s/device/mem_info_vram_total", e->d_name);
+		g->total = read_file(path, text, sizeof text) > 0 ? strtoull(text, NULL, 10) : 0;
+		snprintf(path, sizeof path, "/sys/class/drm/%s/device/product_name", e->d_name);
+		if (read_file(path, text, sizeof text) > 0 && text[0] && text[0] != '\n') {
+			char *nl = strchr(text, '\n');
+			if (nl) *nl = 0;
+			copy_name(g->name, text, sizeof g->name - 1);
+		} else {
+			snprintf(g->name, sizeof g->name, "AMD GPU (%.32s)", e->d_name);
+		}
+	}
+	closedir(d);
+}
+
 // =============================================================================
 #elif defined(__APPLE__)
 // =============================================================================
@@ -975,6 +1068,51 @@ static void sample_net(double dt) {
 	nnic_prev = ncur;
 }
 
+// A CFString or CFData property as text.
+static void cf_text(CFTypeRef v, char *out, size_t cap) {
+	out[0] = 0;
+	if (!v) return;
+	if (CFGetTypeID(v) == CFStringGetTypeID()) {
+		CFStringGetCString((CFStringRef)v, out, (CFIndex)cap, kCFStringEncodingUTF8);
+	} else if (CFGetTypeID(v) == CFDataGetTypeID()) {
+		CFIndex n = CFDataGetLength((CFDataRef)v);
+		if ((size_t)n >= cap) n = (CFIndex)cap - 1;
+		memcpy(out, CFDataGetBytePtr((CFDataRef)v), (size_t)n);
+		out[n] = 0;
+	}
+}
+
+// Every GPU's accelerator publishes PerformanceStatistics, as Activity Monitor reads them.
+static void sample_gpus(void) {
+	ngpus = 0;
+	io_iterator_t it;
+	if (IOServiceGetMatchingServices(MACH_PORT_NULL, IOServiceMatching("IOAccelerator"), &it) != KERN_SUCCESS) return;
+	io_registry_entry_t e;
+	while ((e = IOIteratorNext(it)) != 0) {
+		CFMutableDictionaryRef props = NULL;
+		if (ngpus < MAX_GPUS && IORegistryEntryCreateCFProperties(e, &props, kCFAllocatorDefault, 0) == KERN_SUCCESS && props) {
+			CFDictionaryRef perf = (CFDictionaryRef)CFDictionaryGetValue(props, CFSTR("PerformanceStatistics"));
+			if (perf && CFGetTypeID(perf) == CFDictionaryGetTypeID()) {
+				Gpu *g = &gpus[ngpus++];
+				CFNumberRef u = (CFNumberRef)CFDictionaryGetValue(perf, CFSTR("Device Utilization %"));
+				g->util = u ? (double)dict_u64(perf, "Device Utilization %") : -1;
+				g->used = dict_u64(perf, "vramUsedBytes");
+				uint64_t freeBytes = dict_u64(perf, "vramFreeBytes");
+				g->total = g->used && freeBytes ? g->used + freeBytes : 0; // Apple silicon shares system memory
+				if (!g->total) g->used = dict_u64(perf, "In use system memory");
+				CFTypeRef model = IORegistryEntrySearchCFProperty(e, kIOServicePlane, CFSTR("model"), kCFAllocatorDefault,
+					kIORegistryIterateRecursively | kIORegistryIterateParents);
+				cf_text(model, g->name, sizeof g->name);
+				if (model) CFRelease(model);
+				if (!g->name[0]) snprintf(g->name, sizeof g->name, "GPU %zu", ngpus);
+			}
+			CFRelease(props);
+		}
+		IOObjectRelease(e);
+	}
+	IOObjectRelease(it);
+}
+
 #endif
 
 // ---- sampling and output (both systems) ------------------------------------------
@@ -991,6 +1129,7 @@ static void sample(void) {
 		volumes_at = now;
 	}
 	sample_net(dt);
+	sample_gpus();
 	prev_at = now;
 	seq++;
 }
@@ -1079,6 +1218,21 @@ static void write_snapshot(const char *path, int interval) {
 		js_num(nics[i].rx);
 		js_put(",\"tx\":");
 		js_num(nics[i].tx);
+		js_put("}");
+	}
+	js_put("]");
+
+	js_put(",\"gpu\":[");
+	for (size_t i = 0; i < ngpus; i++) {
+		if (i) js_put(",");
+		js_put("{\"name\":");
+		js_str(gpus[i].name);
+		js_put(",\"util\":");
+		js_num(gpus[i].util < 0 ? -1 : gpus[i].util > 100 ? 100 : gpus[i].util);
+		js_put(",\"memUsed\":");
+		js_u64(gpus[i].used);
+		js_put(",\"memTotal\":");
+		js_u64(gpus[i].total);
 		js_put("}");
 	}
 	js_put("]");
