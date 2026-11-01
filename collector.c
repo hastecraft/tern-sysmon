@@ -1104,6 +1104,9 @@ static void sample_gpus(void) {
 					kIORegistryIterateRecursively | kIORegistryIterateParents);
 				cf_text(model, g->name, sizeof g->name);
 				if (model) CFRelease(model);
+				// The search can climb to the machine itself ("MacBookPro18,3"): not a GPU name.
+				if (strchr(g->name, ',')) g->name[0] = 0;
+				if (!g->name[0] && strncmp(cpu_name, "Apple", 5) == 0) snprintf(g->name, sizeof g->name, "%.100s GPU", cpu_name);
 				if (!g->name[0]) snprintf(g->name, sizeof g->name, "GPU %zu", ngpus);
 			}
 			CFRelease(props);
